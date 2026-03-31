@@ -26,13 +26,21 @@ Can be used for:
 import argparse
 import json
 import os
+import sys
 import warnings
+from pathlib import Path
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+
+# Ensure the project root is on sys.path when invoked as
+# `python scripts/run_generic_fft_band_probe.py ...`.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.analysis.spectral import apply_transform
 from src.training.probes import run_probe

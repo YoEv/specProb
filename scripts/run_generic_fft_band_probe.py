@@ -59,6 +59,100 @@ class _TorchLinearProbeModel:
         self.coef_ = coef
 
 
+def _run_probe_gpu_batched_same_dim(
+    X_task_features: list[np.ndarray],
+    y_labels: np.ndarray,
+    random_state: int,
+    test_size: float,
+    device: str,
+    epochs: int,
+    lr: float,
+    weight_decay: float,
+) -> tuple[list[float], list[_TorchLinearProbeModel]]:
+    """Train multiple binary linear probes in parallel on GPU.
+
+    All tasks must have the same feature dimension. This is used for
+    band-specific probes where each band has identical width.
+    """
+    try:
+        import torch
+    except ImportError as exc:  # pragma: no cover - runtime env dependent
+        raise RuntimeError(
+            "GPU backend requested but PyTorch is not installed in this environment."
+        ) from exc
+
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        raise RuntimeError(
+            "GPU batched backend requested but CUDA is not available. "
+            "Use --backend cpu or ensure CUDA-enabled torch is installed."
+        )
+    if not X_task_features:
+        return [], []
+
+    feat_dim = X_task_features[0].shape[1]
+    if any(x.shape[1] != feat_dim for x in X_task_features):
+        raise ValueError("All batched tasks must have the same feature dimension.")
+
+    n_tasks = len(X_task_features)
+    task_tensor = np.stack(X_task_features, axis=0).astype(np.float32)  # (K, N, D)
+    labels = y_labels.astype(np.int64)
+
+    # Split once and reuse across all tasks for consistency and speed.
+    indices = np.arange(labels.shape[0])
+    train_idx, test_idx = train_test_split(
+        indices,
+        test_size=test_size,
+        random_state=random_state,
+        stratify=labels,
+    )
+    X_train = task_tensor[:, train_idx, :]  # (K, Ntr, D)
+    X_test = task_tensor[:, test_idx, :]  # (K, Nte, D)
+    y_train = labels[train_idx]
+    y_test = labels[test_idx]
+
+    # Task-wise standardization on GPU.
+    X_train_t = torch.from_numpy(X_train).to(device)
+    X_test_t = torch.from_numpy(X_test).to(device)
+    y_train_t = torch.from_numpy(y_train.astype(np.float32)).to(device)
+
+    mean = X_train_t.mean(dim=1, keepdim=True)
+    std = X_train_t.std(dim=1, keepdim=True).clamp_min(1e-6)
+    X_train_t = (X_train_t - mean) / std
+    X_test_t = (X_test_t - mean) / std
+
+    torch.manual_seed(random_state)
+    if device.startswith("cuda"):
+        torch.cuda.manual_seed_all(random_state)
+
+    # One linear head per task.
+    W = torch.nn.Parameter(torch.zeros(n_tasks, feat_dim, device=device))
+    b = torch.nn.Parameter(torch.zeros(n_tasks, device=device))
+    optimizer = torch.optim.AdamW([W, b], lr=lr, weight_decay=weight_decay)
+
+    pos = float(np.sum(y_train == 1))
+    neg = float(np.sum(y_train == 0))
+    pos_weight = torch.tensor(neg / max(pos, 1.0), device=device, dtype=torch.float32)
+    criterion = torch.nn.BCEWithLogitsLoss(reduction="none", pos_weight=pos_weight)
+
+    y_train_expand = y_train_t.unsqueeze(0).expand(n_tasks, -1)  # (K, Ntr)
+    for _ in range(epochs):
+        optimizer.zero_grad(set_to_none=True)
+        logits = torch.einsum("knd,kd->kn", X_train_t, W) + b.unsqueeze(1)
+        losses = criterion(logits, y_train_expand)  # (K, Ntr)
+        loss = losses.mean()
+        loss.backward()
+        optimizer.step()
+
+    with torch.no_grad():
+        logits_test = torch.einsum("knd,kd->kn", X_test_t, W) + b.unsqueeze(1)
+        preds = (torch.sigmoid(logits_test) >= 0.5).to(torch.int64).cpu().numpy()
+
+    accuracies = (preds == y_test.reshape(1, -1)).mean(axis=1).astype(float).tolist()
+    coef = W.detach().cpu().numpy()
+    models = [_TorchLinearProbeModel(c.reshape(1, -1)) for c in coef]
+    return accuracies, models
+
+
 def _run_probe_gpu(
     X_features: np.ndarray,
     y_labels: np.ndarray,
@@ -241,6 +335,11 @@ def main() -> None:
         default=1e-4,
         help="Weight decay for torch GPU probe.",
     )
+    parser.add_argument(
+        "--gpu_batch_bands",
+        action="store_true",
+        help="Batch all equal-width band probes into one GPU training loop.",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.results_dir, exist_ok=True)
@@ -329,12 +428,41 @@ def main() -> None:
     }
 
     band_accuracies: list[float] = []
-    for b in range(num_bands):
-        band_coeffs = coeffs[:, :, bands[b]].reshape(coeffs.shape[0], -1)
-        acc, _, _ = probe_fn(
-            band_coeffs, y_binary, random_state=args.random_state
-        )
-        band_accuracies.append(float(acc))
+    use_batched_bands = args.gpu_batch_bands and args.backend in ("gpu", "auto")
+    if use_batched_bands:
+        try:
+            band_task_features = [
+                coeffs[:, :, bands[b]].reshape(coeffs.shape[0], -1)
+                for b in range(num_bands)
+            ]
+            band_accuracies, _ = _run_probe_gpu_batched_same_dim(
+                X_task_features=band_task_features,
+                y_labels=y_binary,
+                random_state=args.random_state,
+                test_size=0.2,
+                device=args.gpu_device,
+                epochs=args.gpu_epochs,
+                lr=args.gpu_lr,
+                weight_decay=args.gpu_weight_decay,
+            )
+            print(
+                "[run_generic_fft_band_probe] Batched GPU training enabled for "
+                f"{num_bands} band probes."
+            )
+        except Exception as exc:
+            print(
+                "[run_generic_fft_band_probe] Batched GPU band training failed; "
+                f"falling back to per-band training. Reason: {exc}"
+            )
+            band_accuracies = []
+
+    if not band_accuracies:
+        for b in range(num_bands):
+            band_coeffs = coeffs[:, :, bands[b]].reshape(coeffs.shape[0], -1)
+            acc, _, _ = probe_fn(
+                band_coeffs, y_binary, random_state=args.random_state
+            )
+            band_accuracies.append(float(acc))
 
     # Cumulative bands from low to high.
     cumulative_accuracies: list[float] = []

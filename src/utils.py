@@ -4,7 +4,7 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 
-EMBEDDINGS_PATH = "data_artifacts/clap_embeddings.npz"
+EMBEDDINGS_PATH = "data_artifacts/clap_embeddings_t64.npz"
 
 def load_and_prepare_data(file_path=EMBEDDINGS_PATH):
     """

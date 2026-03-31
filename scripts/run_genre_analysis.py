@@ -10,7 +10,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.data_loader import load_data
 from src.analysis import run_probe
-from src.plotting import create_and_save_plot
+from src.visualization.plotting import create_and_save_plot
+from src.visualization.spectral_profile import learned_weight_profile
 
 warnings.filterwarnings('ignore')
 
@@ -57,9 +58,7 @@ def main(target_genre):
     colors = ['gray'] + ['lightskyblue'] * num_bands + ['mediumpurple']
 
     # --- 2. Calculate weights ---
-    model_weights = np.abs(final_model.coef_.flatten())
-    weights_per_freq = np.mean(model_weights.reshape(-1, N_COEFFS), axis=0)
-    normalized_weights = (weights_per_freq - weights_per_freq.min()) / (weights_per_freq.max() - weights_per_freq.min())
+    normalized_weights = learned_weight_profile(final_model, N_COEFFS)
 
     # --- 3. Create and Save Plot ---
     print('Generating plot...')

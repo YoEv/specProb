@@ -1,0 +1,52 @@
+# Python cache and virtual env
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+
+# Build and packaging artifacts
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Local environment files
+.env
+.env.*
+
+# OS and editor files
+.DS_Store
+__MACOSX/
+.idea/
+.vscode/
+
+# Project data and generated artifacts
+data/
+data_artifacts/
+dataset/
+guitarSet/
+results/
+reports/
+
+# Model checkpoints and large binaries
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.onnx
+
+# Raw media / feature dump files
+*.mp3
+*.wav
+*.flac
+*.npy
+*.npz
+*.parquet

@@ -50,3 +50,6 @@ checkpoints/
 *.npy
 *.npz
 *.parquet
+
+# Vendor repos cloned for local setup
+third_party/AudioMAE/

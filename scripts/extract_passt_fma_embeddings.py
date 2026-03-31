@@ -13,6 +13,7 @@ currently: data_artifacts/passt_embeddings_t64.npz (name kept for consistency,
 even if T_passt != 64).
 """
 
+import argparse
 import os
 from typing import List, Tuple, Optional
 
@@ -28,6 +29,40 @@ METADATA_PATH = "data_artifacts/fma_metadata.csv"
 OUTPUT_DIR = "data_artifacts"
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "passt_embeddings_t64.npz")
 SAMPLE_RATE = 32000  # PaSST default in hear21passt examples
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Extract PaSST embeddings for the FMA dataset."
+    )
+    parser.add_argument(
+        "--metadata_path",
+        default=METADATA_PATH,
+        help=f"CSV containing at least audio_path and genre columns (default: {METADATA_PATH}).",
+    )
+    parser.add_argument(
+        "--output_file",
+        default=OUTPUT_FILE,
+        help=f"Output NPZ path (default: {OUTPUT_FILE}).",
+    )
+    parser.add_argument(
+        "--device",
+        default=None,
+        help="Torch device to use, e.g. 'cuda', 'cuda:0', or 'cpu'. Defaults to auto-detect.",
+    )
+    parser.add_argument(
+        "--max_tracks",
+        type=int,
+        default=800,
+        help="Optional cap on total tracks after stratified sampling. Use -1 for no limit.",
+    )
+    parser.add_argument(
+        "--max_per_genre",
+        type=int,
+        default=100,
+        help="Maximum tracks to keep per genre during stratified sampling.",
+    )
+    return parser.parse_args()
 
 
 def _load_passt_model(device: str) -> torch.nn.Module:
@@ -141,29 +176,34 @@ def extract_passt_fma_embeddings(
 
 
 def main() -> None:
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    args = parse_args()
+    output_dir = os.path.dirname(args.output_file) or "."
+    os.makedirs(output_dir, exist_ok=True)
+
+    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[extract_passt_fma] Using device: {device}")
 
-    if not os.path.exists(METADATA_PATH):
+    metadata_path = args.metadata_path
+    if not os.path.exists(metadata_path):
         raise FileNotFoundError(
-            f"Metadata CSV not found at {METADATA_PATH}. "
+            f"Metadata CSV not found at {metadata_path}. "
             "Please run the FMA data preparation first."
         )
 
-    print(f"[extract_passt_fma] Loading metadata from {METADATA_PATH}...")
-    metadata = pd.read_csv(METADATA_PATH)
+    print(f"[extract_passt_fma] Loading metadata from {metadata_path}...")
+    metadata = pd.read_csv(metadata_path)
     if "audio_path" not in metadata.columns or "genre" not in metadata.columns:
         raise ValueError(
             f"Metadata CSV must contain 'audio_path' and 'genre' columns, "
             f"got columns: {list(metadata.columns)}"
         )
 
+    max_tracks = None if args.max_tracks is not None and args.max_tracks < 0 else args.max_tracks
     embeddings, genres, file_paths = extract_passt_fma_embeddings(
         metadata_df=metadata,
         device=device,
-        max_tracks=800,
-        max_per_genre=100,
+        max_tracks=max_tracks,
+        max_per_genre=args.max_per_genre,
     )
 
     print(
@@ -171,9 +211,9 @@ def main() -> None:
         f"(B={embeddings.shape[0]}, F={embeddings.shape[1]}, T={embeddings.shape[2]})"
     )
 
-    print(f"[extract_passt_fma] Saving NPZ to {OUTPUT_FILE}...")
+    print(f"[extract_passt_fma] Saving NPZ to {args.output_file}...")
     np.savez_compressed(
-        OUTPUT_FILE,
+        args.output_file,
         embeddings=embeddings,
         genres=np.asarray(genres),
         file_paths=np.asarray(file_paths),

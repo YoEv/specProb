@@ -8,6 +8,7 @@ Output NPZ keys:
     - 'file_paths': np.ndarray[str], shape (B,)
 """
 
+import argparse
 import glob
 import os
 from typing import List, Tuple, Optional
@@ -23,6 +24,34 @@ AUDIO_DIR = "/home/evev/noiseloss/datasets/D_asap_100"
 OUTPUT_DIR = "data_artifacts"
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "passt_embeddings_asap_t32.npz")
 SAMPLE_RATE = 32000
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Extract PaSST embeddings for the ASAP dataset."
+    )
+    parser.add_argument(
+        "--audio_dir",
+        default=AUDIO_DIR,
+        help=f"Directory containing ASAP WAV files (default: {AUDIO_DIR}).",
+    )
+    parser.add_argument(
+        "--output_file",
+        default=OUTPUT_FILE,
+        help=f"Output NPZ path (default: {OUTPUT_FILE}).",
+    )
+    parser.add_argument(
+        "--device",
+        default=None,
+        help="Torch device to use, e.g. 'cuda', 'cuda:0', or 'cpu'. Defaults to auto-detect.",
+    )
+    parser.add_argument(
+        "--max_files",
+        type=int,
+        default=None,
+        help="Optional cap on the number of ASAP WAV files to process.",
+    )
+    return parser.parse_args()
 
 
 def _load_passt_model(device: str) -> torch.nn.Module:
@@ -107,14 +136,17 @@ def extract_passt_asap_embeddings(
 
 
 def main() -> None:
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    args = parse_args()
+    output_dir = os.path.dirname(args.output_file) or "."
+    os.makedirs(output_dir, exist_ok=True)
+
+    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[extract_passt_asap] Using device: {device}")
 
     embeddings, composers, file_paths = extract_passt_asap_embeddings(
-        AUDIO_DIR,
+        args.audio_dir,
         device=device,
-        max_files=None,  # use all ASAP files by default
+        max_files=args.max_files,
     )
 
     print(
@@ -122,9 +154,9 @@ def main() -> None:
         f"(B={embeddings.shape[0]}, F={embeddings.shape[1]}, T={embeddings.shape[2]})"
     )
 
-    print(f"[extract_passt_asap] Saving NPZ to {OUTPUT_FILE}...")
+    print(f"[extract_passt_asap] Saving NPZ to {args.output_file}...")
     np.savez_compressed(
-        OUTPUT_FILE,
+        args.output_file,
         embeddings=embeddings,
         composers=np.asarray(composers),
         file_paths=np.asarray(file_paths),

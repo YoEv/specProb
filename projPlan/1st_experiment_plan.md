@@ -1,88 +1,202 @@
-# 1st Experiment Plan: PaSST FFT Results Completion
+# 1st Experiment Plan: FMA Embedding Naming + PaSST Medium Extraction
 
-## 0) 范围收敛（只做两件事）
+## 0) 当前目标
 
-本阶段只完成以下两个结果目录，不扩展其他分析：
+本轮先做三件事：
 
-1. `results/passt_fft_composer_specific_analysis`
-2. `results/passt_fft_genre_specific_analysis`
-
-目标是把 **图和指标文件做完整**，确保每个类别都有可用产物。
-
----
-
-## 1) 已确认前提
-
-- PaSST 无周期性已经是结论，本计划不再复核该问题。
-- 本计划只关注：`PaSST FFT` 在 composer / genre 两条线上的完整产出。
+1. 统一 `data_artifacts` 中 FMA small embedding 的命名。
+2. 明确 `fma_medium` 的 metadata 生成方式。
+3. 在 server 端运行 PaSST，对 `fma_medium` 抽取 embedding，并使用新的规范命名。
 
 ---
 
-## 2) 产物标准（必须满足）
+## 1) 命名规范
 
-对每个 composer / genre，都必须至少有：
+### 1.1 FMA small 现有文件重命名
 
-1. 一张图（`*.png`）
-2. 一份指标文件（`*_metrics.json`）
+以下三个文件统一显式带上 `fma_small`：
 
-以 composer 为例，目标格式应与已有样例一致：
+- `data_artifacts/beats_embeddings_t64.npz` -> `data_artifacts/beats_embeddings_fma_small_t64.npz`
+- `data_artifacts/clap_embeddings_t64.npz` -> `data_artifacts/clap_embeddings_fma_small_t64.npz`
+- `data_artifacts/passt_embeddings_t64.npz` -> `data_artifacts/passt_embeddings_fma_small_t64.npz`
 
-- `results/passt_fft_composer_specific_analysis/passt_asap_spectral_summary_Bach_fft.png`
-- `results/passt_fft_composer_specific_analysis/passt_asap_spectral_summary_Bach_fft_metrics.json`
+对应命令：
 
-genre 目录同理，命名规则保持一致。
+```bash
+mv data_artifacts/beats_embeddings_t64.npz data_artifacts/beats_embeddings_fma_small_t64.npz
+mv data_artifacts/clap_embeddings_t64.npz data_artifacts/clap_embeddings_fma_small_t64.npz
+mv data_artifacts/passt_embeddings_t64.npz data_artifacts/passt_embeddings_fma_small_t64.npz
+```
 
----
+### 1.2 后续命名约定
 
-## 3) 执行步骤
+后续统一使用：
 
-## Step A — Composer 结果补齐
+- `data_artifacts/<model>_embeddings_fma_small_t64.npz`
+- `data_artifacts/<model>_embeddings_fma_medium_t64.npz`
+- `data_artifacts/<model>_embeddings_asap_t32.npz`
 
-- 检查 `results/passt_fft_composer_specific_analysis` 中是否每个 composer 都同时具备：
-  - summary 图；
-  - metrics json。
-- 对缺失 composer 重新运行对应脚本生成；
-- 完成后输出一个清单：`composer, has_png, has_metrics_json`。
+示例：
 
-## Step B — Genre 结果补齐
-
-- 检查 `results/passt_fft_genre_specific_analysis` 中是否每个 genre 都同时具备：
-  - summary 图；
-  - metrics json。
-- 对缺失 genre 重新运行对应脚本生成；
-- 完成后输出一个清单：`genre, has_png, has_metrics_json`。
-
-## Step C — 结果一致性检查
-
-- 文件命名是否统一（避免同类文件多种命名）；
-- json 字段是否一致（可比较）；
-- 图像是否可读（无空白图、无损坏图）。
+- `data_artifacts/passt_embeddings_fma_small_t64.npz`
+- `data_artifacts/passt_embeddings_fma_medium_t64.npz`
+- `data_artifacts/clap_embeddings_fma_small_t64.npz`
+- `data_artifacts/beats_embeddings_fma_small_t64.npz`
 
 ---
 
-## 4) 验收标准
+## 2) 关键前提
 
-通过标准只有一个：  
-**两个目录内，每个类别都同时有 png + metrics json，并且命名和字段统一。**
-
----
-
-## 5) 交付物
-
-1. `results/passt_fft_composer_specific_analysis`（完整）
-2. `results/passt_fft_genre_specific_analysis`（完整）
-3. 一个简短完成报告（可写在 `analysis_report.md` 新增小节）：
-   - 总类别数；
-   - 缺失并补齐的类别数；
-   - 最终完整率（应为 100%）。
+- 当前 `data_artifacts/fma_metadata.csv` 实际对应的是 `fma_small`，其 `audio_path` 指向 `data/fma_small/...`。
+- 不能直接拿当前 `fma_metadata.csv` 去跑 `fma_medium`，否则会仍然读到 small 数据。
+- 在跑 `fma_medium` 的 PaSST 抽取前，必须先生成一个 `fma_medium` 专用 metadata 文件。
 
 ---
 
-## 6) 后续阶段（本阶段完成后再做）
+## 3) Server 端操作
 
-完成本计划后，再进入模型扩展：
+### Step A — 登录并进入环境
 
-1. `AudioMAE`
-2. `AudioMAE FT`
+```bash
+module load anaconda3/2023.03
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate specprob
+cd /storage/ice1/2/2/xli3252/specProb
+```
 
-扩展时沿用同样的“每类必须有 png + metrics json”的交付规范。
+如需申请交互式 GPU：
+
+```bash
+srun --account=musi --partition=pace-gpu --qos=pace-ice --gres=gpu:2 --time=4:00:00 --mem=32G --cpus-per-task=4 --pty bash
+module load anaconda3/2023.03
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate specprob
+cd /storage/ice1/2/2/xli3252/specProb
+```
+
+### Step B — 先做 small 文件规范化重命名
+
+```bash
+mv data_artifacts/beats_embeddings_t64.npz data_artifacts/beats_embeddings_fma_small_t64.npz
+mv data_artifacts/clap_embeddings_t64.npz data_artifacts/clap_embeddings_fma_small_t64.npz
+mv data_artifacts/passt_embeddings_t64.npz data_artifacts/passt_embeddings_fma_small_t64.npz
+```
+
+### Step C — 生成 `fma_medium` 专用 metadata
+
+当前仓库里的 `src/data_processing/fma_preparation.py` 默认只为 `fma_small` 生成 metadata，所以这里先临时在 server 端生成 `medium` 版本：
+
+```bash
+python - <<'PY'
+import os
+import pandas as pd
+
+tracks_path = "data/fma_metadata/fma_metadata/tracks.csv"
+audio_dir = "data/fma_medium"
+output_path = "data_artifacts/fma_medium_metadata.csv"
+
+tracks = pd.read_csv(tracks_path, index_col=0, header=[0, 1])
+medium_subset = tracks[tracks[("set", "subset")] == "medium"]
+
+rows = []
+for track_id, row in medium_subset.iterrows():
+    tid_str = f"{track_id:06d}"
+    audio_path = os.path.join(audio_dir, tid_str[:3], f"{tid_str}.mp3")
+    if os.path.exists(audio_path):
+        genre = row[("track", "genre_top")]
+        if pd.notna(genre):
+            rows.append(
+                {
+                    "track_id": track_id,
+                    "genre": genre,
+                    "audio_path": audio_path,
+                }
+            )
+
+pd.DataFrame(rows).to_csv(output_path, index=False)
+print(f"saved {len(rows)} rows to {output_path}")
+PY
+```
+
+### Step D — 用 PaSST 抽取 `fma_medium`
+
+现有 `scripts/extract_passt_fma_embeddings.py` 默认写出 `data_artifacts/passt_embeddings_t64.npz`，而且默认读取 `data_artifacts/fma_metadata.csv`。  
+因此在不改脚本的前提下，server 端建议用一次性命令运行，并显式指定 `fma_medium` metadata 与输出文件名。
+
+推荐命令：
+
+```bash
+python - <<'PY'
+import os
+import numpy as np
+import pandas as pd
+import torch
+
+from scripts.extract_passt_fma_embeddings import extract_passt_fma_embeddings
+
+metadata_path = "data_artifacts/fma_medium_metadata.csv"
+output_path = "data_artifacts/passt_embeddings_fma_medium_t64.npz"
+
+metadata = pd.read_csv(metadata_path)
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+embeddings, genres, file_paths = extract_passt_fma_embeddings(
+    metadata_df=metadata,
+    device=device,
+    max_tracks=None,
+    max_per_genre=1000000,
+)
+
+np.savez_compressed(
+    output_path,
+    embeddings=embeddings,
+    genres=np.asarray(genres),
+    file_paths=np.asarray(file_paths),
+)
+
+print(f"saved embeddings to {output_path}")
+print(f"shape = {embeddings.shape}")
+PY
+```
+
+说明：
+
+- `max_tracks=None` 表示不再限制总条数。
+- `max_per_genre=1000000` 的目的只是关闭原脚本里的每类 100 条上限。
+- 最终输出名必须使用：`data_artifacts/passt_embeddings_fma_medium_t64.npz`。
+
+### Step E — 结果核验
+
+```bash
+ls -lh data_artifacts/passt_embeddings_fma_medium_t64.npz
+python - <<'PY'
+import numpy as np
+d = np.load("data_artifacts/passt_embeddings_fma_medium_t64.npz", allow_pickle=True)
+print(d["embeddings"].shape)
+print(len(d["genres"]), len(d["file_paths"]))
+print(d["file_paths"][0])
+PY
+```
+
+---
+
+## 4) 本轮交付物
+
+本轮完成后，应至少具备：
+
+1. `data_artifacts/beats_embeddings_fma_small_t64.npz`
+2. `data_artifacts/clap_embeddings_fma_small_t64.npz`
+3. `data_artifacts/passt_embeddings_fma_small_t64.npz`
+4. `data_artifacts/fma_medium_metadata.csv`
+5. `data_artifacts/passt_embeddings_fma_medium_t64.npz`
+
+---
+
+## 5) 验收标准
+
+通过标准：
+
+1. small 的三份 embedding 已按新命名规范重命名。
+2. `fma_medium_metadata.csv` 生成成功，且 `audio_path` 指向 `data/fma_medium/...`。
+3. `passt_embeddings_fma_medium_t64.npz` 成功生成并可被 `np.load(...)` 正常读取。
+4. 后续所有 command 一律使用带数据集名的文件名，不再使用歧义命名。

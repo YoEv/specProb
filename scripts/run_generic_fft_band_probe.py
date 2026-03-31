@@ -153,6 +153,103 @@ def _run_probe_gpu_batched_same_dim(
     return accuracies, models
 
 
+def _run_probe_gpu_batched_prefix(
+    X_full_features: np.ndarray,
+    prefix_lengths: list[int],
+    y_labels: np.ndarray,
+    random_state: int,
+    test_size: float,
+    device: str,
+    epochs: int,
+    lr: float,
+    weight_decay: float,
+) -> tuple[list[float], list[_TorchLinearProbeModel]]:
+    """Train cumulative-prefix probes in parallel on GPU.
+
+    Each task uses a prefix of the same full feature vector. We train K linear heads
+    in one loop and apply a per-head prefix mask.
+    """
+    try:
+        import torch
+    except ImportError as exc:  # pragma: no cover - runtime env dependent
+        raise RuntimeError(
+            "GPU backend requested but PyTorch is not installed in this environment."
+        ) from exc
+
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        raise RuntimeError(
+            "GPU batched cumulative backend requested but CUDA is not available."
+        )
+
+    n_tasks = len(prefix_lengths)
+    if n_tasks == 0:
+        return [], []
+
+    labels = y_labels.astype(np.int64)
+    indices = np.arange(labels.shape[0])
+    train_idx, test_idx = train_test_split(
+        indices,
+        test_size=test_size,
+        random_state=random_state,
+        stratify=labels,
+    )
+
+    X_train = X_full_features[train_idx]
+    X_test = X_full_features[test_idx]
+    y_train = labels[train_idx]
+    y_test = labels[test_idx]
+
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train).astype(np.float32)
+    X_test_scaled = scaler.transform(X_test).astype(np.float32)
+
+    torch.manual_seed(random_state)
+    if device.startswith("cuda"):
+        torch.cuda.manual_seed_all(random_state)
+
+    X_train_t = torch.from_numpy(X_train_scaled).to(device)  # (Ntr, D)
+    X_test_t = torch.from_numpy(X_test_scaled).to(device)  # (Nte, D)
+    y_train_t = torch.from_numpy(y_train.astype(np.float32)).to(device)  # (Ntr,)
+
+    d_full = X_train_t.shape[1]
+    W = torch.nn.Parameter(torch.zeros(n_tasks, d_full, device=device))
+    b = torch.nn.Parameter(torch.zeros(n_tasks, device=device))
+    optimizer = torch.optim.AdamW([W, b], lr=lr, weight_decay=weight_decay)
+
+    # Prefix mask: task k only sees first prefix_lengths[k] features.
+    mask = torch.zeros((n_tasks, d_full), device=device, dtype=torch.float32)
+    for k, plen in enumerate(prefix_lengths):
+        plen_int = int(max(1, min(plen, d_full)))
+        mask[k, :plen_int] = 1.0
+
+    pos = float(np.sum(y_train == 1))
+    neg = float(np.sum(y_train == 0))
+    pos_weight = torch.tensor(neg / max(pos, 1.0), device=device, dtype=torch.float32)
+    criterion = torch.nn.BCEWithLogitsLoss(reduction="none", pos_weight=pos_weight)
+
+    y_train_expand = y_train_t.unsqueeze(0).expand(n_tasks, -1)  # (K, Ntr)
+    for _ in range(epochs):
+        optimizer.zero_grad(set_to_none=True)
+        W_masked = W * mask
+        logits = X_train_t @ W_masked.T + b.unsqueeze(0)  # (Ntr, K)
+        logits = logits.T  # (K, Ntr)
+        losses = criterion(logits, y_train_expand)
+        loss = losses.mean()
+        loss.backward()
+        optimizer.step()
+
+    with torch.no_grad():
+        W_masked = W * mask
+        logits_test = X_test_t @ W_masked.T + b.unsqueeze(0)  # (Nte, K)
+        probs_test = torch.sigmoid(logits_test).T  # (K, Nte)
+        preds = (probs_test >= 0.5).to(torch.int64).cpu().numpy()
+
+    accuracies = (preds == y_test.reshape(1, -1)).mean(axis=1).astype(float).tolist()
+    coef = (W * mask).detach().cpu().numpy()
+    models = [_TorchLinearProbeModel(c.reshape(1, -1)) for c in coef]
+    return accuracies, models
+
+
 def _run_probe_gpu(
     X_features: np.ndarray,
     y_labels: np.ndarray,
@@ -340,6 +437,11 @@ def main() -> None:
         action="store_true",
         help="Batch all equal-width band probes into one GPU training loop.",
     )
+    parser.add_argument(
+        "--gpu_batch_cumulative",
+        action="store_true",
+        help="Batch cumulative prefix probes into one GPU training loop.",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.results_dir, exist_ok=True)
@@ -466,21 +568,51 @@ def main() -> None:
 
     # Cumulative bands from low to high.
     cumulative_accuracies: list[float] = []
-    cumulative_coeffs = coeffs[:, :, bands[0]].reshape(coeffs.shape[0], -1)
-    acc, _, _ = probe_fn(
-        cumulative_coeffs, y_binary, random_state=args.random_state
-    )
-    cumulative_accuracies.append(float(acc))
+    use_batched_cumulative = args.gpu_batch_cumulative and args.backend in ("gpu", "auto")
+    if use_batched_cumulative:
+        try:
+            X_full_flat = coeffs.reshape(coeffs.shape[0], -1)
+            prefix_lengths = [
+                coeffs.shape[1] * args.band_width * (b + 1) for b in range(num_bands)
+            ]
+            cumulative_accuracies, _ = _run_probe_gpu_batched_prefix(
+                X_full_features=X_full_flat,
+                prefix_lengths=prefix_lengths,
+                y_labels=y_binary,
+                random_state=args.random_state,
+                test_size=0.2,
+                device=args.gpu_device,
+                epochs=args.gpu_epochs,
+                lr=args.gpu_lr,
+                weight_decay=args.gpu_weight_decay,
+            )
+            print(
+                "[run_generic_fft_band_probe] Batched GPU training enabled for "
+                f"{num_bands} cumulative probes."
+            )
+        except Exception as exc:
+            print(
+                "[run_generic_fft_band_probe] Batched GPU cumulative training failed; "
+                f"falling back to sequential cumulative probes. Reason: {exc}"
+            )
+            cumulative_accuracies = []
 
-    for b in range(1, num_bands):
-        next_band_coeffs = coeffs[:, :, bands[b]].reshape(coeffs.shape[0], -1)
-        cumulative_coeffs = np.concatenate(
-            (cumulative_coeffs, next_band_coeffs), axis=-1
-        )
+    if not cumulative_accuracies:
+        cumulative_coeffs = coeffs[:, :, bands[0]].reshape(coeffs.shape[0], -1)
         acc, _, _ = probe_fn(
             cumulative_coeffs, y_binary, random_state=args.random_state
         )
         cumulative_accuracies.append(float(acc))
+
+        for b in range(1, num_bands):
+            next_band_coeffs = coeffs[:, :, bands[b]].reshape(coeffs.shape[0], -1)
+            cumulative_coeffs = np.concatenate(
+                (cumulative_coeffs, next_band_coeffs), axis=-1
+            )
+            acc, _, _ = probe_fn(
+                cumulative_coeffs, y_binary, random_state=args.random_state
+            )
+            cumulative_accuracies.append(float(acc))
 
     auto_accuracy = max(cumulative_accuracies) if cumulative_accuracies else 0.0
 

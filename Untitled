@@ -1,0 +1,1 @@
+python scripts/run_generic_fft_band_probe.py   --npz_path data_artifacts/passt_embeddings_t64.npz   --label_key genres   --target_label "Folk"   --transform_type fft   --results_dir results/passt_fft_genre_specific_analysis   --prefix passt_fma   --band_width 4   --random_state 42

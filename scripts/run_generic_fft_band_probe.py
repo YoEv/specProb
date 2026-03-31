@@ -35,6 +35,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+from sklearn.model_selection import train_test_split  # noqa: E402
+from sklearn.preprocessing import StandardScaler  # noqa: E402
 
 # Ensure the project root is on sys.path when invoked as
 # `python scripts/run_generic_fft_band_probe.py ...`.
@@ -48,6 +50,86 @@ from src.visualization.spectral_profile import learned_weight_profile
 
 
 warnings.filterwarnings("ignore")
+
+
+class _TorchLinearProbeModel:
+    """Minimal sklearn-like wrapper exposing .coef_."""
+
+    def __init__(self, coef: np.ndarray):
+        self.coef_ = coef
+
+
+def _run_probe_gpu(
+    X_features: np.ndarray,
+    y_labels: np.ndarray,
+    random_state: int,
+    test_size: float,
+    device: str,
+    epochs: int,
+    lr: float,
+    weight_decay: float,
+) -> tuple[float, _TorchLinearProbeModel, None]:
+    try:
+        import torch
+    except ImportError as exc:  # pragma: no cover - runtime env dependent
+        raise RuntimeError(
+            "GPU backend requested but PyTorch is not installed in this environment."
+        ) from exc
+
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        raise RuntimeError(
+            "GPU backend requested but CUDA is not available. "
+            "Use --backend cpu or ensure CUDA-enabled torch is installed."
+        )
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_features,
+        y_labels,
+        test_size=test_size,
+        random_state=random_state,
+        stratify=y_labels,
+    )
+
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train).astype(np.float32)
+    X_test_scaled = scaler.transform(X_test).astype(np.float32)
+    y_train_f = y_train.astype(np.float32)
+
+    torch.manual_seed(random_state)
+    if device.startswith("cuda"):
+        torch.cuda.manual_seed_all(random_state)
+
+    X_train_t = torch.from_numpy(X_train_scaled).to(device)
+    y_train_t = torch.from_numpy(y_train_f).to(device)
+    X_test_t = torch.from_numpy(X_test_scaled).to(device)
+
+    model = torch.nn.Linear(X_train_t.shape[1], 1).to(device)
+
+    pos = float(np.sum(y_train_f == 1.0))
+    neg = float(np.sum(y_train_f == 0.0))
+    pos_weight = torch.tensor([neg / max(pos, 1.0)], device=device)
+    criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=lr, weight_decay=weight_decay
+    )
+
+    y_train_t = y_train_t.view(-1, 1)
+    for _ in range(epochs):
+        optimizer.zero_grad(set_to_none=True)
+        logits = model(X_train_t)
+        loss = criterion(logits, y_train_t)
+        loss.backward()
+        optimizer.step()
+
+    with torch.no_grad():
+        logits_test = model(X_test_t)
+        probs_test = torch.sigmoid(logits_test).squeeze(1)
+        preds = (probs_test >= 0.5).to(torch.int64).cpu().numpy()
+
+    accuracy = float((preds == y_test).mean())
+    coef = model.weight.detach().cpu().numpy()
+    wrapped_model = _TorchLinearProbeModel(coef=coef)
+    return accuracy, wrapped_model, None
 
 
 def _load_npz_generic(npz_path: str, label_key: str) -> tuple[np.ndarray, np.ndarray]:
@@ -128,6 +210,37 @@ def main() -> None:
         default=42,
         help="Random seed for probe training.",
     )
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default="cpu",
+        choices=["cpu", "gpu", "auto"],
+        help="Probe training backend: cpu (sklearn), gpu (torch), or auto.",
+    )
+    parser.add_argument(
+        "--gpu_device",
+        type=str,
+        default="cuda",
+        help="Torch device for GPU backend (default: cuda).",
+    )
+    parser.add_argument(
+        "--gpu_epochs",
+        type=int,
+        default=200,
+        help="Training epochs for torch GPU probe.",
+    )
+    parser.add_argument(
+        "--gpu_lr",
+        type=float,
+        default=0.05,
+        help="Learning rate for torch GPU probe.",
+    )
+    parser.add_argument(
+        "--gpu_weight_decay",
+        type=float,
+        default=1e-4,
+        help="Weight decay for torch GPU probe.",
+    )
     args = parser.parse_args()
 
     os.makedirs(args.results_dir, exist_ok=True)
@@ -162,8 +275,43 @@ def main() -> None:
     )
 
     # Full-spectrum probe.
+    probe_fn = run_probe
+    if args.backend in ("gpu", "auto"):
+        use_gpu = args.backend == "gpu"
+        if args.backend == "auto":
+            try:
+                import torch
+
+                use_gpu = torch.cuda.is_available()
+            except Exception:
+                use_gpu = False
+
+        if use_gpu:
+            print(
+                f"[run_generic_fft_band_probe] Using GPU probe backend on {args.gpu_device}."
+            )
+
+            def probe_fn(
+                X_probe: np.ndarray, y_probe: np.ndarray, random_state: int
+            ) -> tuple[float, _TorchLinearProbeModel, None]:
+                return _run_probe_gpu(
+                    X_features=X_probe,
+                    y_labels=y_probe,
+                    random_state=random_state,
+                    test_size=0.2,
+                    device=args.gpu_device,
+                    epochs=args.gpu_epochs,
+                    lr=args.gpu_lr,
+                    weight_decay=args.gpu_weight_decay,
+                )
+
+        else:
+            print(
+                "[run_generic_fft_band_probe] GPU backend unavailable; falling back to CPU."
+            )
+
     X_full_flat = coeffs.reshape(coeffs.shape[0], -1)
-    orig_accuracy, final_model, _ = run_probe(
+    orig_accuracy, final_model, _ = probe_fn(
         X_full_flat, y_binary, random_state=args.random_state
     )
     if final_model is None:
@@ -183,7 +331,7 @@ def main() -> None:
     band_accuracies: list[float] = []
     for b in range(num_bands):
         band_coeffs = coeffs[:, :, bands[b]].reshape(coeffs.shape[0], -1)
-        acc, _, _ = run_probe(
+        acc, _, _ = probe_fn(
             band_coeffs, y_binary, random_state=args.random_state
         )
         band_accuracies.append(float(acc))
@@ -191,7 +339,7 @@ def main() -> None:
     # Cumulative bands from low to high.
     cumulative_accuracies: list[float] = []
     cumulative_coeffs = coeffs[:, :, bands[0]].reshape(coeffs.shape[0], -1)
-    acc, _, _ = run_probe(
+    acc, _, _ = probe_fn(
         cumulative_coeffs, y_binary, random_state=args.random_state
     )
     cumulative_accuracies.append(float(acc))
@@ -201,7 +349,7 @@ def main() -> None:
         cumulative_coeffs = np.concatenate(
             (cumulative_coeffs, next_band_coeffs), axis=-1
         )
-        acc, _, _ = run_probe(
+        acc, _, _ = probe_fn(
             cumulative_coeffs, y_binary, random_state=args.random_state
         )
         cumulative_accuracies.append(float(acc))

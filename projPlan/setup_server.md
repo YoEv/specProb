@@ -2,7 +2,8 @@
 
 This guide follows the recommended split:
 - Code -> GitHub
-- Dataset / checkpoints -> direct transfer (`rsync` or `scp`)
+- Dataset -> direct transfer (`rsync` or `scp`)
+- Checkpoints (if any) -> direct transfer (`rsync` or `scp`)
 
 ## 1) Push code to GitHub from local server (`192.168.1.14`)
 
@@ -25,20 +26,21 @@ git clone <your-github-repo-url>
 cd specProb
 ```
 
-## 3) Transfer dataset and checkpoints
+## 3) Transfer dataset (and checkpoints if available)
 
 Use `rsync` if possible (recommended: resumable and faster for large files).
 
 ### Option A: rsync (recommended)
 
-Run these on `192.168.1.14`:
+Run these on `192.168.1.14` (target: `xli3252@login-ice.pace.gatech.edu:~/specProb`):
 
 ```bash
-rsync -avhP /home/evev/specProb/data/ <gatech_user>@<gatech_host>:/home/<gatech_user>/specProb/data/
-rsync -avhP /home/evev/specProb/data_artifacts/ <gatech_user>@<gatech_host>:/home/<gatech_user>/specProb/data_artifacts/
-rsync -avhP /home/evev/specProb/dataset/ <gatech_user>@<gatech_host>:/home/<gatech_user>/specProb/dataset/
-rsync -avhP /home/evev/specProb/guitarSet/ <gatech_user>@<gatech_host>:/home/<gatech_user>/specProb/guitarSet/
-rsync -avhP /home/evev/specProb/checkpoints/ <gatech_user>@<gatech_host>:/home/<gatech_user>/specProb/checkpoints/
+rsync -avhP /home/evev/specProb/data/ xli3252@login-ice.pace.gatech.edu:~/specProb/data/
+rsync -avhP /home/evev/specProb/data_artifacts/ xli3252@login-ice.pace.gatech.edu:~/specProb/data_artifacts/
+rsync -avhP /home/evev/specProb/dataset/ xli3252@login-ice.pace.gatech.edu:~/specProb/dataset/
+rsync -avhP /home/evev/specProb/guitarSet/ xli3252@login-ice.pace.gatech.edu:~/specProb/guitarSet/
+# Optional: only if checkpoints directory exists
+# rsync -avhP /home/evev/specProb/checkpoints/ xli3252@login-ice.pace.gatech.edu:~/specProb/checkpoints/
 ```
 
 ### Option B: scp
@@ -46,11 +48,39 @@ rsync -avhP /home/evev/specProb/checkpoints/ <gatech_user>@<gatech_host>:/home/<
 If you prefer `scp`:
 
 ```bash
-scp -r /home/evev/specProb/data <gatech_user>@<gatech_host>:/home/<gatech_user>/specProb/
-scp -r /home/evev/specProb/data_artifacts <gatech_user>@<gatech_host>:/home/<gatech_user>/specProb/
-scp -r /home/evev/specProb/dataset <gatech_user>@<gatech_host>:/home/<gatech_user>/specProb/
-scp -r /home/evev/specProb/guitarSet <gatech_user>@<gatech_host>:/home/<gatech_user>/specProb/
-scp -r /home/evev/specProb/checkpoints <gatech_user>@<gatech_host>:/home/<gatech_user>/specProb/
+scp -r /home/evev/specProb/data xli3252@login-ice.pace.gatech.edu:~/specProb/
+scp -r /home/evev/specProb/data_artifacts xli3252@login-ice.pace.gatech.edu:~/specProb/
+scp -r /home/evev/specProb/dataset xli3252@login-ice.pace.gatech.edu:~/specProb/
+scp -r /home/evev/specProb/guitarSet xli3252@login-ice.pace.gatech.edu:~/specProb/
+# Optional: only if checkpoints directory exists
+# scp -r /home/evev/specProb/checkpoints xli3252@login-ice.pace.gatech.edu:~/specProb/
+```
+
+### Option C: local relay (when direct SSH is blocked)
+
+Use your laptop as a bridge with local folder `/Users/evev/Documents/highFreq/specProb_transfer`.
+
+Run these on your laptop:
+
+```bash
+mkdir -p /Users/evev/Documents/highFreq/specProb_transfer
+
+# Step 1: pull from your own server (192.168.1.14) to laptop
+scp -r evev@192.168.1.14:/home/evev/specProb/data /Users/evev/Documents/highFreq/specProb_transfer/
+scp -r evev@192.168.1.14:/home/evev/specProb/data_artifacts /Users/evev/Documents/highFreq/specProb_transfer/
+scp -r evev@192.168.1.14:/home/evev/specProb/dataset /Users/evev/Documents/highFreq/specProb_transfer/
+scp -r evev@192.168.1.14:/home/evev/specProb/guitarSet /Users/evev/Documents/highFreq/specProb_transfer/
+# Optional: only if checkpoints directory exists
+# scp -r evev@192.168.1.14:/home/evev/specProb/checkpoints /Users/evev/Documents/highFreq/specProb_transfer/
+
+# Step 2: push from laptop to Gatech
+ssh xli3252@login-ice.pace.gatech.edu "mkdir -p ~/specProb"
+scp -r /Users/evev/Documents/highFreq/specProb_transfer/data xli3252@login-ice.pace.gatech.edu:~/specProb/
+scp -r /Users/evev/Documents/highFreq/specProb_transfer/data_artifacts xli3252@login-ice.pace.gatech.edu:~/specProb/
+scp -r /Users/evev/Documents/highFreq/specProb_transfer/dataset xli3252@login-ice.pace.gatech.edu:~/specProb/
+scp -r /Users/evev/Documents/highFreq/specProb_transfer/guitarSet xli3252@login-ice.pace.gatech.edu:~/specProb/
+# Optional: only if checkpoints directory exists
+# scp -r /Users/evev/Documents/highFreq/specProb_transfer/checkpoints xli3252@login-ice.pace.gatech.edu:~/specProb/
 ```
 
 ## 4) Verify on Gatech server
@@ -58,7 +88,9 @@ scp -r /home/evev/specProb/checkpoints <gatech_user>@<gatech_host>:/home/<gatech
 ```bash
 cd /home/<gatech_user>/specProb
 ls
-du -sh data data_artifacts dataset guitarSet checkpoints
+du -sh data data_artifacts dataset guitarSet
+# Optional: run only if checkpoints exists
+# du -sh checkpoints
 ```
 
 ## 5) Export current base environment (on `192.168.1.14`)

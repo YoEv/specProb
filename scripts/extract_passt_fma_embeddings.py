@@ -159,7 +159,8 @@ def _save_checkpoint_npz(
     for i, e in enumerate(embeddings_list):
         padded[i, :, : e.shape[1]] = e
 
-    fd, tmp_path = tempfile.mkstemp(suffix=".npz.tmp", dir=out_dir)
+    # Must end with .npz; otherwise np.savez_compressed appends .npz and writes a different file.
+    fd, tmp_path = tempfile.mkstemp(suffix=".npz", dir=out_dir)
     os.close(fd)
     try:
         np.savez_compressed(

@@ -376,7 +376,9 @@ def _load_audio_mono_32k(load_path: str) -> np.ndarray:
 
 def _load_passt_model(device: str, torch_compile: bool = False) -> torch.nn.Module:
     print("[extract_passt_fma] Loading PaSST model (hear21passt.base)...")
-    model = load_model()
+    # Suppress verbose model banner/architecture prints from hear21passt internals.
+    with _maybe_silence_stdout(True):
+        model = load_model()
     model.to(device)
     model.eval()
     if torch_compile and str(device).startswith("cuda"):
@@ -464,6 +466,8 @@ def _run_extraction_core(
     tqdm_desc: str = "PaSST FMA (new tracks only)",
     checkpoint_every: int = 0,
     checkpoint_path: Optional[str] = None,
+    checkpoint_resume_map: Optional[Dict[str, np.ndarray]] = None,
+    checkpoint_full_shard_df: Optional[pd.DataFrame] = None,
 ) -> Tuple[List[np.ndarray], List[str]]:
     """
     Run loader + PaSST on every row of sampled_df (rows must be extractable).
@@ -501,6 +505,38 @@ def _run_extraction_core(
     batch_orig: List[str] = []
     batch_genres: List[str] = []
 
+    def _checkpoint_payload() -> Tuple[List[np.ndarray], List[str]]:
+        """Checkpoint should contain resume history + current run progress."""
+        if checkpoint_resume_map is None or checkpoint_full_shard_df is None:
+            return embeddings_list, file_paths
+
+        new_by_key: Dict[str, np.ndarray] = {}
+        for fp, emb in zip(file_paths, embeddings_list):
+            new_by_key[_audio_path_key(fp, audio_path_base or "")] = emb
+
+        ck_embs: List[np.ndarray] = []
+        ck_paths: List[str] = []
+        for _, row in checkpoint_full_shard_df.iterrows():
+            orig = row.get("audio_path")
+            if not orig or not isinstance(orig, str):
+                continue
+            key = _audio_path_key(orig, audio_path_base or "")
+            if key in new_by_key:
+                ck_embs.append(new_by_key[key])
+                ck_paths.append(orig)
+            elif key in checkpoint_resume_map:
+                ck_embs.append(checkpoint_resume_map[key])
+                ck_paths.append(orig)
+            else:
+                load_path = resolve_load_path(
+                    orig, wav_mirror_root, wav_strip_prefix, audio_path_base
+                )
+                if not os.path.exists(load_path):
+                    continue
+                # Keep scanning; missing entries can still be computed later.
+                continue
+        return ck_embs, ck_paths
+
     def _maybe_checkpoint() -> None:
         nonlocal ckpt_counter
         if checkpoint_every <= 0 or not checkpoint_path:
@@ -509,7 +545,8 @@ def _run_extraction_core(
         if ckpt_counter % checkpoint_every != 0:
             return
         try:
-            _save_checkpoint_npz(embeddings_list, file_paths, checkpoint_path)
+            ck_embs, ck_paths = _checkpoint_payload()
+            _save_checkpoint_npz(ck_embs, ck_paths, checkpoint_path)
         except OSError as e:
             print(f"[extract_passt_fma] Checkpoint save failed (continuing extract): {e}")
 
@@ -598,7 +635,8 @@ def _run_extraction_core(
         and embeddings_list
         and ckpt_counter % checkpoint_every != 0
     ):
-        _save_checkpoint_npz(embeddings_list, file_paths, checkpoint_path)
+        ck_embs, ck_paths = _checkpoint_payload()
+        _save_checkpoint_npz(ck_embs, ck_paths, checkpoint_path)
 
     return embeddings_list, file_paths
 
@@ -680,6 +718,7 @@ def run_extraction_on_dataframe(
         )
 
     new_by_key: Dict[str, np.ndarray] = {}
+    resume_for_checkpoint = dict(resume_map) if checkpoint_every > 0 else None
     if n_need > 0:
         model = _load_passt_model(device, torch_compile=torch_compile)
         new_embs, new_fps = _run_extraction_core(
@@ -695,6 +734,8 @@ def run_extraction_on_dataframe(
             tqdm_desc=f"PaSST new only ({n_need} tracks, resume skips already done)",
             checkpoint_every=checkpoint_every,
             checkpoint_path=checkpoint_path if checkpoint_every > 0 else None,
+            checkpoint_resume_map=resume_for_checkpoint,
+            checkpoint_full_shard_df=sampled_df if checkpoint_every > 0 else None,
         )
         for emb, fp in zip(new_embs, new_fps):
             new_by_key[_audio_path_key(fp, audio_path_base)] = emb

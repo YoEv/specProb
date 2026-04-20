@@ -1,6 +1,7 @@
 # Setup on Gatech Server
 
 This guide follows the recommended split:
+
 - Code -> GitHub
 - Dataset -> direct transfer (`rsync` or `scp`)
 - Checkpoints (if any) -> direct transfer (`rsync` or `scp`)
@@ -173,8 +174,8 @@ srun --account=musi --partition=pace-gpu --qos=pace-ice \
   --gres=gpu:1 --time=8:00:00 --mem=32G --cpus-per-task=16 --pty bash
 ```
 
-- Use **`--gres=gpu:1`** when you plan to run **one** Python extraction process per allocation (recommended for two shards in parallel: submit **two** such jobs so they can land on **different** nodes).
-- Using **`--gres=gpu:2`** and then starting **two** Python processes **in the same shell** keeps both on the **same node**. They then compete for the same link to shared storage and the same CPUs; throughput often drops sharply compared to running one job at a time.
+- Use `**--gres=gpu:1**` when you plan to run **one** Python extraction process per allocation (recommended for two shards in parallel: submit **two** such jobs so they can land on **different** nodes).
+- Using `**--gres=gpu:2`** and then starting **two** Python processes **in the same shell** keeps both on the **same node**. They then compete for the same link to shared storage and the same CPUs; throughput often drops sharply compared to running one job at a time.
 
 To see your jobs: `squeue -u $USER`. To cancel from another session: `scancel <JOBID>`. To release the interactive allocation, run `exit` or press `Ctrl+D` in that shell.
 
@@ -185,7 +186,7 @@ On the GPU node:
 ```bash
 module load anaconda3
 conda activate specprob
-cd /path/to/specProb   # e.g. repo on ICE storage
+cd Desktop/specProb
 ```
 
 Ensure there is **no trailing space after `\`** when continuing long shell lines; otherwise the next line is treated as a new command.
@@ -194,10 +195,10 @@ Ensure there is **no trailing space after `\`** when continuing long shell lines
 
 Sharding is **deterministic** in code: after the same metadata and sampling options, the track list is split with stride `num_shards`. Shard `k` takes rows `k, k+num_shards, k+2*num_shards, ...`.
 
-- **`--num_shards 2 --shard_index 0`**: even indices in that list.
-- **`--num_shards 2 --shard_index 1`**: odd indices.
+- `**--num_shards 2 --shard_index 0`**: even indices in that list.
+- `**--num_shards 2 --shard_index 1**`: odd indices.
 
-**Critical:** For two parallel jobs, use the **same** `--metadata_path`, `--max_tracks`, `--max_per_genre`, and other sampling-related flags, and the **same** `--num_shards`. Only **`--shard_index`**, **`--output_file`**, and (per job) **`CUDA_VISIBLE_DEVICES`** / `--device` should differ. Otherwise the two jobs are not guaranteed to partition the same logical list correctly.
+**Critical:** For two parallel jobs, use the **same** `--metadata_path`, `--max_tracks`, `--max_per_genre`, and other sampling-related flags, and the **same** `--num_shards`. Only `**--shard_index`**, `**--output_file**`, and (per job) `**CUDA_VISIBLE_DEVICES**` / `--device` should differ. Otherwise the two jobs are not guaranteed to partition the same logical list correctly.
 
 **Do not** point two jobs at the **same** `--output_file` or the same `*.checkpoint.npz`; they will corrupt each other’s NPZ.
 
@@ -239,7 +240,7 @@ CUDA_VISIBLE_DEVICES=0 python scripts/extract_passt_fma_embeddings.py \
   --auto_resume
 ```
 
-If you ever saved **`passt_fma_medium_shard1.npz`** while still using **`--shard_index 0`**, that file can contain the **wrong** tracks (shard 0’s slice, not shard 1’s). Remove the mistaken outputs and rerun shard 1 with `--shard_index 1`:
+If you ever saved `**passt_fma_medium_shard1.npz**` while still using `**--shard_index 0**`, that file can contain the **wrong** tracks (shard 0’s slice, not shard 1’s). Remove the mistaken outputs and rerun shard 1 with `--shard_index 1`:
 
 ```bash
 rm -f data_artifacts/passt_fma_medium_shard1.npz \
@@ -248,32 +249,56 @@ rm -f data_artifacts/passt_fma_medium_shard1.npz \
 
 ### 8.4 Resume and checkpoints
 
-- **`--auto_resume`**: if `--output_file` already exists, it is used like `--resume_from_npz` to skip paths already present in that NPZ.
+- `**--auto_resume**`: if `--output_file` already exists, it is used like `--resume_from_npz` to skip paths already present in that NPZ.
 - **Checkpoint**: with `--checkpoint_every N`, progress is also written to `<output_file>.checkpoint.npz` (or `--checkpoint_path`) every **N newly extracted** tracks, so a killed job loses at most about **N** tracks of work. On startup, a readable checkpoint is merged into the resume map.
-- **Path keys (important)**: resume/checkpoint matching uses a stable key for each `audio_path`. Relative paths are resolved against **`--audio_path_base`**, which defaults to the **repository root** when metadata lives under `data_artifacts/` (parent of that folder). That way checkpoint resume does **not** depend on your shell’s current working directory. Override with `--audio_path_base /path/to/specProb` if your layout differs.
+- **Path keys (important)**: resume/checkpoint matching uses a stable key for each `audio_path`. Relative paths are resolved against `**--audio_path_base`**, which defaults to the **repository root** when metadata lives under `data_artifacts/` (parent of that folder). That way checkpoint resume does **not** depend on your shell’s current working directory. Override with `--audio_path_base /path/to/specProb` if your layout differs.
 - If a checkpoint is **empty, truncated, or corrupt** (e.g. interrupted write, disk quota full, or two processes writing the same file), the script may skip it and continue (you may re-extract some tracks).
 - **Leftover `data_artifacts/tmp*.npz.tmp.npz` files** are failed atomic checkpoint writes; safe to remove to free space:  
-  `rm -f data_artifacts/tmp*.npz.tmp.npz`
+`rm -f data_artifacts/tmp*.npz.tmp.npz`
 
 ### 8.5 Merge shards into one NPZ
 
-After **both** shards finish successfully:
+After **all shards** finish successfully (example for `num_shards=8`):
 
 ```bash
 python scripts/merge_fma_embedding_npz_shards.py \
   --inputs data_artifacts/passt_fma_medium_shard0.npz \
            data_artifacts/passt_fma_medium_shard1.npz \
+           data_artifacts/passt_fma_medium_shard2.npz \
+           data_artifacts/passt_fma_medium_shard3.npz \
+           data_artifacts/passt_fma_medium_shard4.npz \
+           data_artifacts/passt_fma_medium_shard5.npz \
+           data_artifacts/passt_fma_medium_shard6.npz \
+           data_artifacts/passt_fma_medium_shard7.npz \
   --output data_artifacts/passt_embeddings_fma_medium_t64.npz
 ```
 
-Order of `--inputs` should match shard indices if you care about a stable ordering (shard0 then shard1).
+Order of `--inputs` should match shard indices if you care about a stable ordering (shard0 ... shard7).
+
+If merge is OOM-killed, you can run spectral probing directly on shard files (no merged NPZ needed):
+
+```bash
+python scripts/run_passt_spectral_profiles.py \
+  --npz_paths data_artifacts/passt_fma_medium_shard0.npz \
+              data_artifacts/passt_fma_medium_shard1.npz \
+              data_artifacts/passt_fma_medium_shard2.npz \
+              data_artifacts/passt_fma_medium_shard3.npz \
+              data_artifacts/passt_fma_medium_shard4.npz \
+              data_artifacts/passt_fma_medium_shard5.npz \
+              data_artifacts/passt_fma_medium_shard6.npz \
+              data_artifacts/passt_fma_medium_shard7.npz \
+  --label_key genres \
+  --results_dir results/passt_spectral_medium \
+  --prefix passt_fma_medium
+```
 
 ### 8.6 If two parallel jobs are still slow
 
-Raising **`--cpus-per-task`** helps CPU-side decode/prefetch but often does **not** fix **two jobs on the same node** both reading from **shared network storage**. Mitigations: use **two separate `srun` jobs** with **`gpu:1`** (different nodes when the scheduler allows), **stage audio to node-local disk** first, or run shards **sequentially** on one GPU if wall-clock time is lower due to less I/O contention.
+Raising `**--cpus-per-task**` helps CPU-side decode/prefetch but often does **not** fix **two jobs on the same node** both reading from **shared network storage**. Mitigations: use **two separate `srun` jobs** with `**gpu:1`** (different nodes when the scheduler allows), **stage audio to node-local disk** first, or run shards **sequentially** on one GPU if wall-clock time is lower due to less I/O contention.
 
 ## Notes
 
 - Keep large data/checkpoints out of GitHub.
 - If a checkpoint must be versioned with code, consider Git LFS for specific files only.
 - Keep secrets in `.env` and never commit them.
+

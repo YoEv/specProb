@@ -11,11 +11,11 @@ with keys:
     - genres: (B,)
     - track_ids: (B,)
 
-After运行本脚本，你就可以用:
+After running this script, use:
 
     python scripts/run_multi_layer_spectral.py
 
-来做多层 spectral profile 分析。
+for multilayer spectral profile analysis.
 """
 import os
 
@@ -50,7 +50,7 @@ def main():
     print(f"[extract_clap_multilayer] Loaded metadata with {len(metadata)} tracks.")
 
     # 3) Extract multi-layer embeddings
-    # layer_indices=None → 默认取第一层和最后一层；如需其它层可改成 [0, 6, 11] 等。
+    # Default to the first and last layers; use [0, 6, 11] for other layers.
     embeddings, layers, genres, track_ids = extract_embeddings_multi_layer(
         metadata_df=metadata,
         model=model,

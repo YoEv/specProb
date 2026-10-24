@@ -55,7 +55,7 @@ def compute_multi_layer_spectral_profiles(
     For each target genre and each encoder layer, run FFT-based probes and compute
     learned spectral profiles.
 
-    This addresses plan 1.2: 对比不同层的 embedding 是否都有相似的三峰结构。
+    This addresses plan 1.2: compare whether layers exhibit similar three-peak structures.
     """
     os.makedirs(RESULTS_DIR, exist_ok=True)
     X, layers, genres, track_ids = load_multi_layer_embeddings(path)

@@ -1,8 +1,8 @@
 """
 Extract BEATs embeddings for the D_asap_100 classical composer dataset,
-与 CLAP / PaSST 的 ASAP 抽取保持一致。
+Matches the CLAP and PaSST extraction pipeline for ASAP.
 
-输出 NPZ:
+Output NPZ:
     - 'embeddings': np.ndarray, shape (B, F_beats, T_beats)
     - 'composers':  np.ndarray[str], shape (B,)
     - 'file_paths': np.ndarray[str], shape (B,)
@@ -43,9 +43,9 @@ def _extract_beats_for_file(
     device: str,
     sr: int = SAMPLE_RATE,
 ) -> np.ndarray:
-    """对单条 ASAP WAV 抽取 BEATs 时间序列 embedding, 统一为 (D, T_frames)."""
+    """Extract one ASAP WAV as a BEATs embedding sequence of shape (D, T_frames)."""
     waveform, _ = librosa.load(audio_path, sr=sr, mono=True)
-    # 10 秒中心裁剪，保持与 CLAP/PaSST 一致
+    # Center-crop to 10 seconds, matching CLAP and PaSST.
     target_len = sr * 10
     if len(waveform) > target_len:
         start = (len(waveform) - target_len) // 2
@@ -61,10 +61,10 @@ def _extract_beats_for_file(
         # Official BEATs interface: returns (features, padding_mask)
         feats, _ = model.extract_features(wav_tensor, padding_mask=padding_mask)
 
-    # 通常 feats: (1, T_frames, D)，但为安全起见做一次规范化
-    feats = feats.squeeze(0)  # 期望 (T_frames, D)
+    # Normalize the usual (1, T_frames, D) feature layout.
+    feats = feats.squeeze(0)  # Expected shape: (T_frames, D)
     if feats.ndim == 1:
-        # 极端退化情况：只有时间维，当作 D=1 处理
+        # Treat a degenerate time-only output as D=1.
         feats = feats.unsqueeze(-1)  # (T_frames, 1)
     elif feats.ndim != 2:
         raise RuntimeError(f"Unexpected BEATs feature shape {feats.shape} for {audio_path}")

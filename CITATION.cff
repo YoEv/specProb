@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "Please cite this technical report when using this work."
+type: report
+title: "Spectral Probing of Frozen Audio Encoders: An Exploratory Study of Low-Frequency Concentration"
+authors:
+  - family-names: Li
+    given-names: Xiaosha
+  - family-names: Lerch
+    given-names: Alexander
+year: 2026
+repository-code: "https://github.com/YoEv/specProb"
+url: "https://github.com/YoEv/specProb"

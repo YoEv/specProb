@@ -195,7 +195,7 @@ def plot_3d_sample_freq_surface(
     """
     Plot a 3D surface of (sample index, frequency coefficient, mean magnitude across dims).
 
-    This对应“不给 sample 聚合成一个 mean 曲线，而是把 sample 当作一个轴”。
+    Treat samples as an explicit axis rather than aggregating them into one mean curve.
 
     Args:
         X_freq: (n_samples, n_dims, n_coeffs)
@@ -203,7 +203,7 @@ def plot_3d_sample_freq_surface(
     assert X_freq.ndim == 3
     n_samples, n_dims, n_coeffs = X_freq.shape
 
-    # Mean over dims but保留 sample 轴
+    # Average over feature dimensions while retaining the sample axis.
     mean_over_dims = np.mean(X_freq, axis=1)  # (n_samples, n_coeffs)
     n_used = min(max_samples, n_samples)
     Z = mean_over_dims[:n_used]  # (n_used, n_coeffs)

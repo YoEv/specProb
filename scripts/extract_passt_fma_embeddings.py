@@ -75,7 +75,7 @@ def extract_passt_fma_embeddings(
 
     If max_tracks / max_per_genre are set, we perform a simple stratified
     subsample: up to `max_per_genre` tracks per genre, capped by max_tracks
-    in total（例如 8 个 genre × 100 ≈ 800 条）.
+    in total (for example, 8 genres times 100 tracks gives about 800 tracks).
 
     Returns:
         embeddings: np.ndarray, shape (B, F_passt, T_passt)

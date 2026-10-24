@@ -43,7 +43,7 @@ def _plot_learned_profiles_for_genres(genres):
 
     profiles = {}
     for genre in genres:
-        # one-vs-rest on the full dataset,保持和主 FFT 分析脚本一致
+        # One-versus-rest on the full dataset, matching the main FFT analysis.
         y_binary = (y_str == genre).astype(int)
         if np.sum(y_binary) < 10 or len(np.unique(y_binary)) < 2:
             print(

@@ -27,10 +27,10 @@ def describe_band_layout(
 ) -> None:
     """Describe how we split coefficients into bands, and check for gaps / overlaps.
 
-    This对应 plan 里“检查 band 拼接与覆盖是否合理，并文档化 band 划分方式”。
-    它不直接解析脚本，而是用和脚本相同的逻辑构造 bands，然后检查：
-    - 每个 band 的起止 index；
-    - 所有 band 的并集是否正好覆盖 [0, n_coeffs) 且没有重复。
+    Check and document the band concatenation and coverage specified in the plan.
+    Construct bands using the same logic as the analysis scripts, then check:
+    - The start and end index of each band.
+    - Whether the bands cover [0, n_coeffs) exactly once.
     """
     _ensure_results_dir()
 
@@ -43,7 +43,7 @@ def describe_band_layout(
     gaps = sorted(set(expected) - set(covered))
     duplicates = sorted([idx for idx in covered if covered.count(idx) > 1])
 
-    # Note: 对于 33 个 coeff，我们现在只用前 32 个 (8 bands × 4)，最后一个系数目前没用到。
+    # Of 33 coefficients, use the first 32 (8 bands x 4); the last is unused.
     unused = sorted(set(range(n_coeffs)) - set(covered))
 
     lines = []
@@ -119,7 +119,7 @@ def run_random_vector_fft_pipeline(
 ) -> None:
     """Run FFT pipeline on random Gaussian inputs and visualise mean spectrum.
 
-    If random inputs也产生类似 3-peaks，就更像是数值 / 实现层面的 artifact。
+    Similar three-peak profiles from random inputs would suggest numerical or implementation artifacts.
     """
     _ensure_results_dir()
     all_mean_specs = []
@@ -159,7 +159,7 @@ def plot_per_sample_spectra_for_genre(
 ) -> None:
     """Plot per-sample spectra for one genre (thin transparent lines + mean).
 
-    用来检查 3 个 peak 是大多数样本都有，还是少数 outlier 导致的平均效应。
+    Check whether three peaks occur in most samples or arise from a few outliers.
     """
     _ensure_results_dir()
     X, y_str = load_data(EMBEDDINGS_PATH)
@@ -287,7 +287,7 @@ def run_layout_variants_experiment(
         2) Time-only (freq-aggregated) FFT:
            - First average over feature dims to get X_time ∈ R^{B×T}, then FFT over T.
 
-    （更复杂的 freq-major 等可以在需要时追加，这里先验证“只取 time axis”是否仍有三峰。）
+    More complex frequency-major layouts can be added; first check the time-axis-only profile.
     """
     _ensure_results_dir()
     rng = np.random.RandomState(random_state)

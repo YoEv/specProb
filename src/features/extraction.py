@@ -162,7 +162,7 @@ def extract_embeddings_multi_layer(metadata_df, model, processor, device, layer_
     Extract CLAP embeddings for multiple encoder layers per audio file.
 
     This is a multi-layer generalisation of `extract_embeddings` used for Task 1
-    (plan 1.2: “不同层 / 不同模型的 embedding” 对比）。
+    (plan 1.2: compare embeddings across layers and models).
 
     Shape conventions:
         raw hidden_states per segment: (T, D=768)

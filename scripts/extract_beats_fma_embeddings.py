@@ -1,8 +1,8 @@
 """
 Extract BEATs embeddings for the FMA / LMD dataset, using the same metadata
-CSV as the CLAP pipeline,并保存为 NPZ 供多模型对比使用。
+CSV as the CLAP pipeline, saving NPZ files for cross-model comparisons.
 
-输出 NPZ:
+Output NPZ:
     - 'embeddings': np.ndarray, shape (B, F_beats, T_beats)
     - 'genres':     np.ndarray[str], shape (B,)
     - 'file_paths': np.ndarray[str], shape (B,)
@@ -23,14 +23,14 @@ from third_party.beats_loader import load_beats_model
 METADATA_PATH = "data_artifacts/fma_metadata.csv"
 OUTPUT_DIR = "data_artifacts"
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "beats_embeddings_t64.npz")
-SAMPLE_RATE = 16000  # BEATs 默认 16k
+SAMPLE_RATE = 16000  # BEATs uses 16 kHz.
 BEATS_CKPT_PATH = os.path.join(OUTPUT_DIR, "BEATs_iter3_finetuned_on_AS2M_cpt1.pt")
 
 def _load_beats_model(device: str):
     """
-    加载 BEATs 模型（使用官方 BEATs checkpoint + 本地 loader）。
+    Load BEATs using an official checkpoint and the local loader.
 
-    请确保 BEATS_CKPT_PATH 指向你下载的 *.pt 文件。
+    Set BEATS_CKPT_PATH to the downloaded .pt checkpoint.
     """
     print(f"[extract_beats_fma] Loading BEATs model from {BEATS_CKPT_PATH} ...")
     return load_beats_model(BEATS_CKPT_PATH, device=device)
@@ -43,9 +43,9 @@ def _extract_beats_for_file(
     sr: int = SAMPLE_RATE,
 ) -> np.ndarray:
     """
-    对单条音频抽取 BEATs 时间序列 embedding, 统一为 (F_beats, T_beats).
+    Extract a BEATs embedding sequence for one audio file as (F_beats, T_beats).
 
-    返回:
+    Returns:
         emb_np: np.ndarray, shape (F_beats, T_beats)
     """
     waveform, _ = librosa.load(audio_path, sr=sr, mono=True)
@@ -53,10 +53,10 @@ def _extract_beats_for_file(
     padding_mask = torch.zeros(wav_tensor.shape, dtype=torch.bool, device=device)
 
     with torch.no_grad():
-        # 官方 BEATs 接口：extract_features -> (features, padding_mask)
+        # Official BEATs API: extract_features -> (features, padding_mask)
         feats, _ = model.extract_features(wav_tensor, padding_mask=padding_mask)
 
-    feats = feats.squeeze(0)  # 期望 (T_frames, D)
+    feats = feats.squeeze(0)  # Expected shape: (T_frames, D)
     if feats.ndim == 1:
         feats = feats.unsqueeze(-1)  # (T_frames, 1)
     elif feats.ndim != 2:
@@ -74,8 +74,8 @@ def extract_beats_fma_embeddings(
     max_per_genre: int = 100,
 ) -> Tuple[np.ndarray, List[str], List[str]]:
     """
-    在 FMA 上按 genre 分层抽样，最多每个 genre 100 条，总数 ~800 条，
-    为每条 track 抽取 BEATs embedding 并堆叠。
+    Sample up to 100 FMA tracks per genre, approximately 800 in total,
+    then extract and stack a BEATs embedding for each track.
     """
     if "genre" not in metadata_df.columns:
         raise ValueError(
@@ -83,7 +83,7 @@ def extract_beats_fma_embeddings(
             f"got columns: {list(metadata_df.columns)}"
         )
 
-    # 简单按 genre 分层采样
+    # Stratified sampling by genre.
     sampled_indices: List[int] = []
     for genre, group in metadata_df.groupby("genre"):
         idx = group.index.to_list()
@@ -126,7 +126,7 @@ def extract_beats_fma_embeddings(
     if not embeddings_list:
         raise RuntimeError("[extract_beats_fma] No embeddings were extracted.")
 
-    # 右侧 padding 对齐时间长度
+    # Right-pad sequences to the same temporal length.
     max_T = max(emb.shape[1] for emb in embeddings_list)
     F = embeddings_list[0].shape[0]
     padded = np.zeros((len(embeddings_list), F, max_T), dtype=np.float32)
